@@ -31,10 +31,17 @@ class CommController extends Controller
     public function sendEmailVerify(CommSendEmailVerify $request)
     {
         $ip = $request->ip();
-        if (RateLimiter::tooManyAttempts($ip, 3)) {
+        // 检查每分钟限制
+        if (RateLimiter::tooManyAttempts($ip . ':minute', 3)) {
             abort(429, __('Too many requests, please try again later.'));
         }
-        RateLimiter::hit($ip, 60);
+        // 检查每小时限制
+        if (RateLimiter::tooManyAttempts($ip . ':hour', 30)) {
+            abort(429, __('Too many requests, please try again later.'));
+        }
+
+        RateLimiter::hit($ip . ':minute', 60);
+        RateLimiter::hit($ip . ':hour', 3600);
 
         if ((int)config('v2board.recaptcha_enable', 0)) {
             $recaptcha = new ReCaptcha(config('v2board.recaptcha_key'));
@@ -45,6 +52,20 @@ class CommController extends Controller
         }
         $email = $request->input('email');
         $isforget = $request->input('isforget');
+
+        // 检查邮箱的频率限制
+        // 检查每分钟限制
+        if (RateLimiter::tooManyAttempts('email:' . $email . ':minute', 1)) {
+            abort(500, __('Email verification code has been sent, please request again later'));
+        }
+        // 检查每小时限制
+        if (RateLimiter::tooManyAttempts('email:' . $email . ':hour', 5)) {
+            abort(500, __('Email verification code has been sent, please request again later'));
+        }
+
+        RateLimiter::hit('email:' . $email . ':minute', 60);
+        RateLimiter::hit('email:' . $email . ':hour', 3600);
+
         $email_exists = User::where('email', $email)->exists();
         //检查是否在白名单内
         if ((int)config('v2board.email_whitelist_enable', 0)) {
@@ -65,13 +86,10 @@ class CommController extends Controller
         if (isset($isforget)) {
             if ($isforget == 0 && $email_exists) {
                 abort(500, __('This email is registered'));
-            } 
+            }
             if ($isforget == 1 && !$email_exists) {
                 abort(500, __('This email is not registered in the system'));
             }
-        }
-        if (Cache::get(CacheKey::get('LAST_SEND_EMAIL_VERIFY_TIMESTAMP', $email))) {
-            abort(500, __('Email verification code has been sent, please request again later'));
         }
         $code = rand(100000, 999999);
         $subject = config('v2board.app_name', 'V2Board') . __('Email verification code');
@@ -88,7 +106,6 @@ class CommController extends Controller
         ]);
 
         Cache::put(CacheKey::get('EMAIL_VERIFY_CODE', $email), $code, 300);
-        Cache::put(CacheKey::get('LAST_SEND_EMAIL_VERIFY_TIMESTAMP', $email), time(), 60);
         return response([
             'data' => true
         ]);
